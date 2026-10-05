@@ -1,6 +1,7 @@
 import spacy
 
 _nlp_model = None
+#DET ADP AUX
 STOP_POS = {"DET", "ADP", "AUX"}
 
 def get_nlp_model():

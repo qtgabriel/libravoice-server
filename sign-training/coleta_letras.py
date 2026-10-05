@@ -2,6 +2,7 @@ import cv2
 import csv
 import os
 import time
+import math
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
@@ -30,26 +31,47 @@ if not os.path.exists(OUTPUT_CSV):
         header = ['label']
         for i in range(21):
             header.extend([f'x_{i}', f'y_{i}', f'z_{i}'])
+        # Adiciona os cabeçalhos das features geométricas da Mudança A
+        header.extend(['dist_thumb_index', 'dist_thumb_middle', 'dist_index_middle'])
         writer.writerow(header)
 
 
+def calcular_distancia(p1, p2):
+    """Calcula a distância euclidiana 3D entre dois pontos (x, y, z)"""
+    return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2 + (p1[2] - p2[2])**2)
+
+
 def extrair_e_normalizar(hand_landmarks):
-    """Extrai os 21 landmarks e normaliza em relação ao pulso (Landmark 0)"""
-    landmarks_brutos = []
-    for lm in hand_landmarks:
-        landmarks_brutos.extend([lm.x, lm.y, lm.z])
+    """Extrai os 21 landmarks, normaliza em relação ao pulso (Landmark 0)
+    e adiciona features geométricas avançadas (Mudança A)"""
+    pts = [[lm.x, lm.y, lm.z] for lm in hand_landmarks]
 
     # Landmark 0 é o pulso
-    base_x, base_y, base_z = landmarks_brutos[0], landmarks_brutos[1], landmarks_brutos[2]
+    base_x, base_y, base_z = pts[0][0], pts[0][1], pts[0][2]
 
+    # 1. Landmarks normalizados em relação ao pulso
     norm_landmarks = []
-    for i in range(0, len(landmarks_brutos), 3):
+    for p in pts:
         norm_landmarks.extend([
-            landmarks_brutos[i] - base_x,
-            landmarks_brutos[i + 1] - base_y,
-            landmarks_brutos[i + 2] - base_z
+            p[0] - base_x,
+            p[1] - base_y,
+            p[2] - base_z
         ])
-    return norm_landmarks
+
+    # 2. Mudança A: Engenharia de Recursos Geométricos
+    # Tamanho da mão para invariância de escala (distância do pulso 0 até a base do dedo médio 9)
+    tamanho_mao = calcular_distancia(pts[0], pts[9])
+    if tamanho_mao == 0:
+        tamanho_mao = 1.0  # Evita divisão por zero
+
+    # Distâncias relevantes
+    dist_thumb_index = calcular_distancia(pts[4], pts[8]) / tamanho_mao   # Polegar ao Indicador
+    dist_thumb_middle = calcular_distancia(pts[4], pts[12]) / tamanho_mao  # Polegar ao Médio
+    dist_index_middle = calcular_distancia(pts[8], pts[12]) / tamanho_mao  # Indicador ao Médio
+
+    features_extra = [dist_thumb_index, dist_thumb_middle, dist_index_middle]
+
+    return norm_landmarks + features_extra
 
 
 # 3. Captura de Vídeo (macOS Webcam)
@@ -59,7 +81,7 @@ cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
 print("=== COLETOR DE LANDMARKS LIBRAS (MEDIAPIPE TASKS) ===")
 letra = input("Digite a letra ou classe que vai gravar agora (ex: A, B, NEUTRO): ").strip().upper()
-total_amostras = int(input("Quantas amostras deseja coletar? (Recomendado: 300): "))
+total_amostras = 300
 
 print("\n--- INSTRUÇÕES ---")
 print("1. Pressione 'G' para INICIAR a gravação.")

@@ -31,25 +31,22 @@ if not os.path.exists(OUTPUT_CSV):
         header = ['label']
         for i in range(21):
             header.extend([f'x_{i}', f'y_{i}', f'z_{i}'])
-        # Adiciona os cabeçalhos das features geométricas da Mudança A
         header.extend(['dist_thumb_index', 'dist_thumb_middle', 'dist_index_middle'])
         writer.writerow(header)
 
 
 def calcular_distancia(p1, p2):
     """Calcula a distância euclidiana 3D entre dois pontos (x, y, z)"""
-    return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2 + (p1[2] - p2[2])**2)
+    return math.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2 + (p1[2] - p2[2]) ** 2)
 
 
 def extrair_e_normalizar(hand_landmarks):
     """Extrai os 21 landmarks, normaliza em relação ao pulso (Landmark 0)
-    e adiciona features geométricas avançadas (Mudança A)"""
+    e adiciona features geométricas avançadas"""
     pts = [[lm.x, lm.y, lm.z] for lm in hand_landmarks]
 
-    # Landmark 0 é o pulso
     base_x, base_y, base_z = pts[0][0], pts[0][1], pts[0][2]
 
-    # 1. Landmarks normalizados em relação ao pulso
     norm_landmarks = []
     for p in pts:
         norm_landmarks.extend([
@@ -58,16 +55,13 @@ def extrair_e_normalizar(hand_landmarks):
             p[2] - base_z
         ])
 
-    # 2. Mudança A: Engenharia de Recursos Geométricos
-    # Tamanho da mão para invariância de escala (distância do pulso 0 até a base do dedo médio 9)
     tamanho_mao = calcular_distancia(pts[0], pts[9])
     if tamanho_mao == 0:
-        tamanho_mao = 1.0  # Evita divisão por zero
+        tamanho_mao = 1.0
 
-    # Distâncias relevantes
-    dist_thumb_index = calcular_distancia(pts[4], pts[8]) / tamanho_mao   # Polegar ao Indicador
-    dist_thumb_middle = calcular_distancia(pts[4], pts[12]) / tamanho_mao  # Polegar ao Médio
-    dist_index_middle = calcular_distancia(pts[8], pts[12]) / tamanho_mao  # Indicador ao Médio
+    dist_thumb_index = calcular_distancia(pts[4], pts[8]) / tamanho_mao
+    dist_thumb_middle = calcular_distancia(pts[4], pts[12]) / tamanho_mao
+    dist_index_middle = calcular_distancia(pts[8], pts[12]) / tamanho_mao
 
     features_extra = [dist_thumb_index, dist_thumb_middle, dist_index_middle]
 
@@ -76,17 +70,35 @@ def extrair_e_normalizar(hand_landmarks):
 
 # 3. Captura de Vídeo (macOS Webcam)
 cap = cv2.VideoCapture(0)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+FRAME_WIDTH = 640
+FRAME_HEIGHT = 480
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+
+# --- CONFIGURAÇÃO DA REGIÃO DE INTERESSE (ÁREA DA MÃO) ---
+box_size = 260
+
+# Ajustes de deslocamento (Offset X e Y):
+# offset_x: Positivo move para a direita, negativo para a esquerda.
+# offset_y: Positivo move para baixo, negativo para cima.
+offset_x = -50
+offset_y = -50
+
+box_x1 = ((FRAME_WIDTH - box_size) // 2) + offset_x
+box_y1 = ((FRAME_HEIGHT - box_size) // 2) + offset_y
+
+box_x2 = box_x1 + box_size
+box_y2 = box_y1 + box_size
 
 print("=== COLETOR DE LANDMARKS LIBRAS (MEDIAPIPE TASKS) ===")
 letra = input("Digite a letra ou classe que vai gravar agora (ex: A, B, NEUTRO): ").strip().upper()
 total_amostras = 300
 
 print("\n--- INSTRUÇÕES ---")
-print("1. Pressione 'G' para INICIAR a gravação.")
-print("2. Mova levemente a mão enquanto o contador avança.")
-print("3. Pressione 'Q' para interromper e sair.")
+print("1. Posicione sua mão confortavelmente dentro do quadrado vermelho.")
+print("2. Pressione 'G' para INICIAR a gravação.")
+print("3. Mova levemente a mão dentro da área enquanto o contador avança.")
+print("4. Pressione 'Q' para interromper e sair.")
 
 gravando = False
 contador = 0
@@ -101,38 +113,41 @@ with open(OUTPUT_CSV, mode='a', newline='') as f:
             print("Erro ao acessar a câmera do Mac.")
             break
 
-        # Espelha o frame horizontalmente
         frame = cv2.flip(frame, 1)
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Converte para o formato de imagem do MediaPipe Tasks
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
 
-        # O modo VIDEO exige timestamp em milissegundos
         frame_timestamp_ms = int((time.time() - start_time) * 1000)
         detection_result = detector.detect_for_video(mp_image, frame_timestamp_ms)
 
-        # Processa os pontos se houver mão detectada
-        if detection_result.hand_landmarks:
-            hand_landmarks = detection_result.hand_landmarks[0]  # Pega a primeira mão
+        # Desenha o quadrado guia com os offsets aplicados
+        cv2.rectangle(frame, (box_x1, box_y1), (box_x2, box_y2), (0, 0, 255), 2)
 
-            # Desenha os 21 pontos na tela manualmente
+        if detection_system_result := detection_result.hand_landmarks:
+            hand_landmarks = detection_result.hand_landmarks[0]
             h, w, _ = frame.shape
+
+            pulso = hand_landmarks[0]
+            px, py = int(pulso.x * w), int(pulso.y * h)
+            dentro_da_caixa = (box_x1 <= px <= box_x2) and (box_y1 <= py <= box_y2)
+
             for lm in hand_landmarks:
                 cx, cy = int(lm.x * w), int(lm.y * h)
                 cv2.circle(frame, (cx, cy), 4, (0, 255, 0), -1)
 
-            if gravando:
+            if gravando and dentro_da_caixa:
                 norm_landmarks = extrair_e_normalizar(hand_landmarks)
                 writer.writerow([letra] + norm_landmarks)
                 contador += 1
 
-        # Textos de interface
         status_texto = f"GRAVANDO: {contador}/{total_amostras}" if gravando else "Pressione 'G' para comecar"
         cor_status = (0, 0, 255) if gravando else (255, 255, 0)
 
         cv2.putText(frame, f"Classe: {letra}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
         cv2.putText(frame, status_texto, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, cor_status, 2)
+        cv2.putText(frame, "Apoie a mao no quadrado", (box_x1, box_y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255),
+                    1)
 
         cv2.imshow("Coletor Libras - Tasks API (macOS)", frame)
 

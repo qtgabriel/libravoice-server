@@ -54,15 +54,13 @@ def extrair_e_normalizar(hand_landmarks):
         ])
 
     # 2. Mudança A: Engenharia de Recursos Geométricos
-    # Tamanho da mão para invariância de escala (distância do pulso 0 até a base do dedo médio 9)
     tamanho_mao = calcular_distancia(pts[0], pts[9])
     if tamanho_mao == 0:
         tamanho_mao = 1.0  # Evita divisão por zero
 
-    # Distâncias relevantes
-    dist_thumb_index = calcular_distancia(pts[4], pts[8]) / tamanho_mao   # Polegar ao Indicador
-    dist_thumb_middle = calcular_distancia(pts[4], pts[12]) / tamanho_mao  # Polegar ao Médio
-    dist_index_middle = calcular_distancia(pts[8], pts[12]) / tamanho_mao  # Indicador ao Médio
+    dist_thumb_index = calcular_distancia(pts[4], pts[8]) / tamanho_mao
+    dist_thumb_middle = calcular_distancia(pts[4], pts[12]) / tamanho_mao
+    dist_index_middle = calcular_distancia(pts[8], pts[12]) / tamanho_mao
 
     features_extra = [dist_thumb_index, dist_thumb_middle, dist_index_middle]
 
@@ -71,8 +69,20 @@ def extrair_e_normalizar(hand_landmarks):
 
 # 3. Inicializar a Webcam (macOS)
 cap = cv2.VideoCapture(0)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+FRAME_WIDTH = 640
+FRAME_HEIGHT = 480
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+
+# --- CONFIGURAÇÃO DA REGIÃO DE INTERESSE (ÁREA DA MÃO) ---
+box_size = 260
+offset_x = -50
+offset_y = -50
+
+box_x1 = ((FRAME_WIDTH - box_size) // 2) + offset_x
+box_y1 = ((FRAME_HEIGHT - box_size) // 2) + offset_y
+box_x2 = box_x1 + box_size
+box_y2 = box_y1 + box_size
 
 print("Iniciando detecção em tempo real... Pressione 'Q' para sair.")
 start_time = time.time()
@@ -93,44 +103,71 @@ while cap.isOpened():
     # Processar frame com MediaPipe Tasks
     detection_result = detector.detect_for_video(mp_image, frame_timestamp_ms)
 
+    # Desenha o quadrado guia na posição configurada
+    cv2.rectangle(frame, (box_x1, box_y1), (box_x2, box_y2), (0, 0, 255), 2)
+
     letra_detectada = "Nenhuma mao"
     confianca_texto = ""
 
     if detection_result.hand_landmarks:
         hand_landmarks = detection_result.hand_landmarks[0]
+        h, w, _ = frame.shape
+
+        # Checar se o pulso está dentro da caixa para classificar
+        pulso = hand_landmarks[0]
+        px, py = int(pulso.x * w), int(pulso.y * h)
+        dentro_da_caixa = (box_x1 <= px <= box_x2) and (box_y1 <= py <= box_y2)
 
         # Desenhar articulações da mão na tela
-        h, w, _ = frame.shape
         for lm in hand_landmarks:
             cx, cy = int(lm.x * w), int(lm.y * h)
             cv2.circle(frame, (cx, cy), 4, (0, 255, 0), -1)
 
-        # Extrair landmarks normalizados e features geométricas (67 colunas)
-        features = extrair_e_normalizar(hand_landmarks)
+        if dentro_da_caixa:
+            features = extrair_e_normalizar(hand_landmarks)
 
-        # Obter probabilidades de cada classe
-        probs = model.predict_proba([features])[0]
-        max_prob_idx = np.argmax(probs)
-        confianca = probs[max_prob_idx] * 100
+            probs = model.predict_proba([features])[0]
+            max_prob_idx = np.argmax(probs)
+            confianca = probs[max_prob_idx] * 100
 
-        # Filtro de confiança para evitar falsos positivos
-        if confianca > 60.0:
-            letra_detectada = model.classes_[max_prob_idx]
-            confianca_texto = f"({confianca:.1f}%)"
+            if confianca > 60.0:
+                letra_detectada = model.classes_[max_prob_idx]
+                confianca_texto = f"({confianca:.1f}%)"
+            else:
+                letra_detectada = "Incerto"
         else:
-            letra_detectada = "Incerto"
+            letra_detectada = "Ajuste na caixa"
 
-    # Exibir a letra na tela em destaque
-    cv2.rectangle(frame, (10, 10), (350, 80), (0, 0, 0), -1)  # Fundo escuro para legibilidade
+    # --- PAINEL DE RESULTADO (Canto Superior Direito) ---
+    # Posicionado no canto direito para evitar qualquer conflito com o quadrado guia
+    box_res_x1 = FRAME_WIDTH - 240
+    box_res_y1 = 10
+    box_res_x2 = FRAME_WIDTH - 10
+    box_res_y2 = 70
+
+    cv2.rectangle(frame, (box_res_x1, box_res_y1), (box_res_x2, box_res_y2), (0, 0, 0), -1)
     cv2.putText(
         frame,
-        f"Letra: {letra_detectada} {confianca_texto}",
-        (20, 55),
+        f"Letra: {letra_detectada}",
+        (box_res_x1 + 10, box_res_y1 + 28),
         cv2.FONT_HERSHEY_SIMPLEX,
-        1.0,
+        0.7,
         (0, 255, 0),
         2
     )
+    if confianca_texto:
+        cv2.putText(
+            frame,
+            confianca_texto,
+            (box_res_x1 + 10, box_res_y1 + 53),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
+            1
+        )
+
+    # Texto de instrução logo acima da caixa vermelha
+    cv2.putText(frame, "Mantenha a mao no quadrado", (box_x1, max(20, box_y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
     cv2.imshow("Detector de LIBRAS - Tempo Real", frame)
 

@@ -13,6 +13,9 @@ class TextToLibras:
             f"https://api-signbank.levantelab.com.br/api/tabela_sinais/sinais?page=1&search={term}&search_type=start_with"
         ).json()
         try:
+            for i in term_json["data"]:
+                if term == i["id_sinais"]:
+                    return i["json"]["video"]["url"]
             return term_json["data"][0]["json"]["video"]["url"]
         except:
             return term
@@ -51,7 +54,7 @@ class TextToLibras:
             for term in terms:
                 translated.append(self._get_word_sign(term))
             print(terms, translated)
-            self._test_view_sings(translated)
+            #self._test_view_sings(translated)
             return translated
         except Exception as e:
             print(e)
